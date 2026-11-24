@@ -1,0 +1,24 @@
+# Secretos y configuración local — nunca subir
+.env
+.env.*
+!.env.example
+
+# Dependencias y compilados
+node_modules/
+dist/
+dist-demo/
+*.zip
+
+# Datos del servidor (van en las copias de seguridad, no en Git)
+portadas/
+api/portadas/
+*.sql.gz
+*.dump
+backups/
+
+# Sistema y editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
