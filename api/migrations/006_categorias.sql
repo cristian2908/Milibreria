@@ -14,7 +14,12 @@ WHERE cardinality(categorias) = 0 AND coalesce(genero, '') <> '';
 CREATE INDEX IF NOT EXISTS libros_categorias_idx ON libros USING GIN (categorias);
 
 -- Búsqueda sin tildes en el servidor (opcional; la estantería ya filtra en el navegador)
-CREATE EXTENSION IF NOT EXISTS unaccent;
+DO $$
+BEGIN
+  CREATE EXTENSION IF NOT EXISTS unaccent;
+EXCEPTION WHEN insufficient_privilege OR undefined_file THEN
+  RAISE NOTICE 'unaccent no se instaló (permiso o paquete); la búsqueda sin tildes del navegador sigue funcionando';
+END $$;
 -- Ejemplo:
 -- SELECT * FROM libros
 -- WHERE usuario_id = $1
