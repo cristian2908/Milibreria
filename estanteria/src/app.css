@@ -228,6 +228,7 @@ textarea::placeholder { color: var(--placeholder); }
 .toggle input { width: 18px; height: 18px; accent-color: var(--accent); }
 
 .scan { display: grid; gap: 8px; }
+.btn-local { font-size: 14px; padding: 12px 14px; color: var(--ink); }
 .read-text { font-size: 12.5px; color: var(--muted); }
 .read-text summary { cursor: pointer; color: var(--accent-text); width: fit-content; }
 .read-text p { margin: 6px 0 0; max-height: 160px; overflow-y: auto; white-space: pre-wrap; line-height: 1.45; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); }

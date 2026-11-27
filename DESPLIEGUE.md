@@ -81,7 +81,9 @@ Si el servidor no tiene Node 20, usa un contenedor de un solo uso:
 docker run --rm -v "$PWD":/app -w /app -e VITE_SOURCE=api node:20 sh -c "npm ci && npm run build"
 ```
 
-Comprueba que existan `dist/index.html` y `dist/vendor/opencv.js` (unos 13 MB).
+Comprueba que existan `dist/index.html`, `dist/vendor/opencv.js` (unos 13 MB) y
+`dist/vendor/tesseract/` (`worker.min.js`, `core/*.wasm.js`, `lang/spa.traineddata.gz`):
+son el recorte automático y la lectura sin internet.
 
 ### 5. Actualizar la API (pide confirmación)
 
@@ -125,6 +127,7 @@ Reemplaza `<base>` por la URL del servidor (por ejemplo `http://localhost` o el 
 curl -s -o /dev/null -w "estanteria %{http_code}\n" <base>/estanteria/
 curl -s -o /dev/null -w "opencv %{http_code} %{size_download} bytes\n" <base>/estanteria/vendor/opencv.js
 curl -sI -H 'Accept-Encoding: gzip' <base>/estanteria/vendor/opencv.js | grep -i content-encoding || echo "sin gzip"
+curl -s -o /dev/null -w "tesseract idioma %{http_code} %{size_download} bytes\n" <base>/estanteria/vendor/tesseract/lang/spa.traineddata.gz
 curl -s -o /dev/null -w "analizar/estado %{http_code} (401 = ruta montada, 404 = falta montar)\n" <base>/api/libros/analizar/estado
 docker compose exec <api> node -e "console.log('OPENROUTER_API_KEY presente:', !!process.env.OPENROUTER_API_KEY)"
 ```
@@ -161,5 +164,6 @@ En pocas líneas:
 - Resultado de cada verificación del paso 9.
 - Cómo probar desde el celular: abrir `<base>/estanteria/` con la sesión iniciada en Mi Biblioteca,
   **Agregar → Con fotos**, tomar portada y contraportada, revisar que se recorten y pulsar
-  «Leer datos de las fotos».
+  «Leer datos de las fotos» (IA) o «Leer en este dispositivo (sin internet)» (Tesseract).
+  Para Nginx, `lang/spa.traineddata.gz` debe servirse tal cual (sin `Content-Encoding: gzip`).
 - Cómo volver atrás: restaurar las copias `.bak-…`, el `dist` anterior, y reiniciar.

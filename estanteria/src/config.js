@@ -12,3 +12,9 @@ export const OPENCV_URLS = [
   import.meta.env.MODE === 'demo' ? null : `${import.meta.env.BASE_URL}vendor/opencv.js`,
   OPENCV_CDN,
 ].filter(Boolean);
+
+// Tesseract (lectura local de portadas, sin internet): archivos servidos desde el mismo origen.
+// Servidor: dist/vendor/tesseract/ · vista previa de Claude: tesseract/ junto a index.html.
+export const TESS_BASE = import.meta.env.VITE_TESS_BASE
+  || (import.meta.env.MODE === 'demo' ? './tesseract/' : `${import.meta.env.BASE_URL}vendor/tesseract/`);
+export const TESS_LANG_AS_TEXT = import.meta.env.MODE === 'demo';

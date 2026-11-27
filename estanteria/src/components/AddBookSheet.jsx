@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { FORMATS, READ_STATUS } from '../bookshelf/status.js';
 import { fileToImage, renderImage, normalizeBox, imageDataOf } from '../scan/image.js';
 import { loadOpenCVFrom, detectBook } from '../scan/cvcrop.js';
+import { leerLocal } from '../scan/local.js';
 import { analyzeCovers, scanInfo } from '../scan/analyze.js';
 import CategoryPicker from './CategoryPicker.jsx';
 import { cleanCategory } from '../search.js';
@@ -132,6 +133,38 @@ export default function AddBookSheet({ open, onClose, onSave, source, token, cat
       const fFull = await renderImage(front.img, useCrop && front.quad ? { ...opts, quad: front.quad } : opts);
       const bFull = back ? await renderImage(back.img, useCrop && back.quad ? { ...opts, quad: back.quad } : opts) : null;
       const r = await analyzeCovers({ front: fFull, back: bFull }, { source, token, signal: ctrl.signal, categories, lang });
+      aplicar(r, false);
+    } catch (ex) {
+      if (ex.name === 'AbortError') return;
+      const msg = ex.code === 'not_granted' ? 'sheet.readNotGranted'
+        : ex.code === 'rate_limited' ? 'sheet.readRate'
+        : ex.code === 'unavailable' ? 'sheet.readUnavailable'
+        : 'sheet.readFail';
+      setScan({ state: 'error', msg });
+    }
+  };
+
+  // Lectura en el dispositivo con Tesseract (sin internet, sin cupos)
+  const runLocal = async () => {
+    if (!front) return;
+    abortRef.current?.abort();
+    setErr('');
+    const etapa = (e, p) => setScan({ state: 'reading', msg: `sheet.local.${e}`, pct: Math.round((p || 0) * 100) });
+    etapa('cargando', 0);
+    try {
+      const opts = { maxSide: 1600, quality: 0.9 };
+      const fImg = await renderImage(front.img, useCrop && front.quad ? { ...opts, quad: front.quad } : opts);
+      const bImg = back ? await renderImage(back.img, useCrop && back.quad ? { ...opts, quad: back.quad } : opts) : null;
+      const r = await leerLocal({ front: fImg.blob, back: bImg?.blob, categories, onEtapa: etapa });
+      aplicar(r, true);
+    } catch (ex) {
+      console.error('lectura local:', ex);
+      setScan({ state: 'error', msg: 'sheet.localFail' });
+    }
+  };
+
+  const aplicar = (r, local) => {
+    {
       const sugg = (Array.isArray(r.categorias) ? r.categorias : []).map(cleanCategory).filter(Boolean).slice(0, 3);
       setSuggested(sugg);
       setReadText(r.texto_visible || '');
@@ -149,15 +182,8 @@ export default function AddBookSheet({ open, onClose, onSave, source, token, cat
         categories: f.categories.length ? f.categories : sugg,
       }));
       const low = r.confianza === 'baja';
-      setScan({ state: 'done', msg: low ? 'sheet.readLow' : 'sheet.readDone' });
+      setScan({ state: 'done', via: local ? 'local' : 'ia', msg: local ? (low ? 'sheet.localLow' : 'sheet.localDone') : low ? 'sheet.readLow' : 'sheet.readDone' });
       setTimeout(() => titleRef.current?.focus({ preventScroll: true }), 50);
-    } catch (ex) {
-      if (ex.name === 'AbortError') return;
-      const msg = ex.code === 'not_granted' ? 'sheet.readNotGranted'
-        : ex.code === 'rate_limited' ? 'sheet.readRate'
-        : ex.code === 'unavailable' ? 'sheet.readUnavailable'
-        : 'sheet.readFail';
-      setScan({ state: 'error', msg });
     }
   };
 
@@ -256,11 +282,19 @@ export default function AddBookSheet({ open, onClose, onSave, source, token, cat
                 {scan.state === 'reading' ? <span className="spinner" aria-hidden="true" /> : (
                   <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true"><path d="M3 7V4.5A1.5 1.5 0 0 1 4.5 3H7M13 3h2.5A1.5 1.5 0 0 1 17 4.5V7M17 13v2.5a1.5 1.5 0 0 1-1.5 1.5H13M7 17H4.5A1.5 1.5 0 0 1 3 15.5V13M6 10h8" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
                 )}
-                {t(scan.state === 'reading' ? 'sheet.reading' : scan.state === 'done' ? 'sheet.readAgain' : 'sheet.read')}
+                {t(scan.state === 'reading' ? 'sheet.reading' : scan.state === 'done' && scan.via === 'ia' ? 'sheet.readAgain' : 'sheet.read')}
+              </button>
+              <button
+                type="button" className="btn btn-ghost btn-local"
+                disabled={!front || scan.state === 'reading'}
+                onClick={runLocal}
+              >
+                <svg width="18" height="18" viewBox="0 0 20 20" aria-hidden="true"><rect x="5" y="2.5" width="10" height="15" rx="2" fill="none" stroke="currentColor" strokeWidth="1.6" /><path d="M8 6h4M8 9h4M8 12h2.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" /></svg>
+                {t('sheet.local.btn')}
               </button>
               <p className={`scan-msg is-${scan.state}`} aria-live="polite">
-                {t(canScan === false ? 'sheet.readNoScan'
-                  : scan.msg || (!front ? 'sheet.readFirst' : provider === 'openrouter' ? 'sheet.readUsesOpenRouter' : 'sheet.readUsesClaude'))}
+                {scan.msg ? t(scan.msg) + (scan.state === 'reading' && scan.pct ? ` ${scan.pct} %` : '')
+                  : t(canScan === false ? 'sheet.local.only' : !front ? 'sheet.readFirst' : provider === 'openrouter' ? 'sheet.readUsesOpenRouter' : 'sheet.readUsesClaude')}
               </p>
               {readText ? (
                 <details className="read-text">

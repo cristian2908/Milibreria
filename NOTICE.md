@@ -12,6 +12,14 @@
   `api/estanteria-routes.js` se escribió en Node desde cero (el repositorio indica MIT en su
   README, pero no incluye archivo de licencia).
 
+- **Tesseract.js** 7 (Apache 2.0) — https://github.com/naptha/tesseract.js, con
+  **tesseract.js-core** (motor Tesseract OCR compilado a WebAssembly, Apache 2.0) y los datos
+  de idioma **@tesseract.js-data/spa** (`4.0.0_best_int`, de tesseract-ocr/tessdata_best,
+  Apache 2.0). En la vista previa se sirve `worker.min.js` con un cambio de una expresión
+  (usar `l.code` en vez de `l.data` al iniciar con el idioma en memoria); en el servidor se
+  sirve sin cambios.
+- **ZXing para JavaScript** (`@zxing/library`, Apache 2.0) — lectura de códigos de barras/QR.
+
 ## Estantería 3D
 
 La estantería 3D se reimplementó desde cero en React. Se usó como referencia de

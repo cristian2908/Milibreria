@@ -67,3 +67,7 @@ warpQuad; carga perezosa con loadOpenCVFrom(OPENCV_URLS)), `src/scan/completar.j
 páginas desde `texto_visible`; copia CJS en api/estanteria-routes.js). La API lee con OpenRouter (modelos :free) o
 Claude según `IA_PROVEEDOR`; `GET /api/libros/analizar/estado` informa el proveedor. El prompt vive en
 `src/scan/prompt.js` y su copia en la API: mantener iguales.
+
+Lectura local: `src/scan/local.js` (Tesseract.js 7 + BarcodeDetector/ZXing) y `src/scan/reglas.js` (funciones puras:
+camposDesdeOCR, camposPortada, resumenContra, esNombre…). Archivos en TESS_BASE (config.js); vite los copia
+(copyTesseract). Opción futura documentada: proveedor Ollama en la API.

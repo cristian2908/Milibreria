@@ -199,6 +199,32 @@ Claude viene de jsDelivr.
 Probado con fotos reales tomadas a mano frente a una biblioteca: 1–1,5 s en un
 computador; en un celular puede tardar unos segundos más (no bloquea la hoja).
 
+### Lectura en el dispositivo (Tesseract, sin internet)
+
+Botón **«Leer en este dispositivo (sin internet)»** en la hoja de agregar. Funciona aunque no
+haya IA configurada y la foto no sale del celular o del computador.
+
+- **OCR:** Tesseract.js 7 con datos de español «best_int» (motor ≈ 3,9 MB + idioma 2,1 MB; se
+  descargan la primera vez que se usa). Lee la foto ya recortada por OpenCV a 1600 px.
+- **ISBN:** primero el código de barras o el QR de la contraportada (`BarcodeDetector` del
+  navegador o ZXing), validado por dígito de control; si no hay, el ISBN impreso.
+- **Reglas** (`src/scan/reglas.js`, sin IA): título = líneas de letra más grande de la portada;
+  subtítulo = líneas siguientes medianas; autor = línea con forma de nombre propio (gana si
+  también aparece en la contraportada); resumen = párrafos de la contraportada con 85 % de
+  confianza o más; editorial por lista conocida o «Editorial …»; páginas impresas; categorías
+  existentes cuyas palabras clave aparecen en el texto.
+- Probado con «Natura» (fotos reales en la mano): título, subtítulo, autor, ISBN (por el QR),
+  resumen y categoría correctos en unos 4,5 s en computador. Con fotos borrosas o
+  contraportadas a dos columnas acierta menos: deja vacío lo que no lee con seguridad.
+- Servidor: `npm run build` copia todo a `dist/vendor/tesseract/` (cero peticiones externas).
+  Vista previa de Claude: los mismos archivos junto a `index.html` (el idioma va en base64
+  en un `.txt`, porque ahí no se sirven `.gz`).
+
+**Opción para después — IA local con Ollama:** un modelo de visión corriendo en el propio
+servidor (por ejemplo Qwen2.5-VL o Llama 3.2 Vision) entendería la portada como la IA en la
+nube sin enviar nada fuera. Necesita 8–16 GB de RAM como mínimo y es lento sin tarjeta
+gráfica. Encajaría como un proveedor más en `/api/libros/analizar` (`IA_PROVEEDOR=ollama`).
+
 ### Lectura de las fotos: OpenRouter gratis o Claude
 
 - **Vista previa (artifact de Claude):** lee Claude dentro de la página.
