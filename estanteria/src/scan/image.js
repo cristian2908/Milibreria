@@ -1,3 +1,5 @@
+import { warpQuad } from './cvcrop.js';
+
 // Utilidades de imagen para fotos de portada/contraportada tomadas con el celular.
 
 /** Archivo (input file / cámara) → HTMLImageElement con orientación EXIF aplicada. */
@@ -16,7 +18,10 @@ export function fileToImage(file) {
  * Recorta (box normalizado 0–1, opcional) y reduce la imagen.
  * Devuelve { dataUrl, blob, width, height, aspect }.
  */
-export async function renderImage(img, { box = null, maxSide = 1400, quality = 0.85 } = {}) {
+export async function renderImage(img, { box = null, quad = null, maxSide = 1400, quality = 0.85 } = {}) {
+  if (quad && typeof window !== 'undefined' && window.cv?.Mat) {
+    try { return await renderWarped(img, quad, maxSide, quality); } catch { /* sigue sin enderezar */ }
+  }
   const iw = img.naturalWidth, ih = img.naturalHeight;
   const b = validBox(box) ? box : { x: 0, y: 0, w: 1, h: 1 };
   const sx = Math.round(b.x * iw), sy = Math.round(b.y * ih);
@@ -31,6 +36,30 @@ export async function renderImage(img, { box = null, maxSide = 1400, quality = 0
   const dataUrl = cv.toDataURL('image/jpeg', quality);
   const blob = await new Promise((r) => cv.toBlob(r, 'image/jpeg', quality));
   return { dataUrl, blob, width: w, height: h, aspect: w / h };
+}
+
+/** Píxeles de la imagen reducida a `maxSide` (para OpenCV). */
+export function imageDataOf(img, maxSide = 1600) {
+  const iw = img.naturalWidth, ih = img.naturalHeight, s = Math.min(1, maxSide / Math.max(iw, ih));
+  const cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(iw * s)); cv.height = Math.max(1, Math.round(ih * s));
+  const ctx = cv.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, cv.width, cv.height);
+  return ctx.getImageData(0, 0, cv.width, cv.height);
+}
+
+/** Endereza el libro (cuadrilátero 0–1) con OpenCV y lo devuelve como JPEG. */
+async function renderWarped(img, quad, maxSide, quality) {
+  const cv = window.cv;
+  const mat = warpQuad(cv, imageDataOf(img, 2000), quad, maxSide);
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = mat.cols; canvas.height = mat.rows;
+    canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(mat.data), mat.cols, mat.rows), 0, 0);
+    const dataUrl = canvas.toDataURL('image/jpeg', quality);
+    const blob = await new Promise((r) => canvas.toBlob(r, 'image/jpeg', quality));
+    return { dataUrl, blob, width: mat.cols, height: mat.rows, aspect: mat.cols / mat.rows };
+  } finally { mat.delete(); }
 }
 
 export function validBox(b) {

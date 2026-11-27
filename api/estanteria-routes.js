@@ -3,9 +3,15 @@
 //
 //   require('./estanteria-routes')(app, pool, { auth: verificarToken, puedeEditar });
 //
-// Variables de entorno (.env):
-//   ANTHROPIC_API_KEY=sk-ant-...        (la misma que usabas para "Agregar por foto")
+// Variables de entorno (.env) — basta con UNA de las dos claves:
+//   OPENROUTER_API_KEY=sk-or-...        lectura GRATIS con modelos ":free" de OpenRouter
+//                                       (límite: 20 por minuto y 50 por día; 1000/día si
+//                                       alguna vez compraste ≥ 10 USD de créditos)
+//   OPENROUTER_MODELS=amazon/nova-2-lite-v1:free,openrouter/free   (opcional, en orden)
+//   ANTHROPIC_API_KEY=sk-ant-...        lectura con Claude (de pago)
 //   ANTHROPIC_MODEL=claude-sonnet-5-5   (opcional)
+//   IA_PROVEEDOR=auto | openrouter | anthropic   (auto: OpenRouter primero si hay clave,
+//                                       y si falla, Claude si hay clave)
 //   PORTADAS_DIR=/app/portadas          (volumen compartido con Nginx)
 //   PORTADAS_URL=/portadas              (ruta pública)
 //
@@ -19,6 +25,10 @@ const express = require('express');
 const PORTADAS_DIR = process.env.PORTADAS_DIR || path.join(__dirname, 'portadas');
 const PORTADAS_URL = (process.env.PORTADAS_URL || '/portadas').replace(/\/$/, '');
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
+// Idea tomada de github.com/ceodaniyal/free-llm-image-to-text: OCR con modelos de visión
+// gratuitos de OpenRouter (por defecto el mismo que usa ese proyecto).
+const OPENROUTER_MODELS = (process.env.OPENROUTER_MODELS || 'amazon/nova-2-lite-v1:free,openrouter/free')
+  .split(',').map((m) => m.trim()).filter(Boolean);
 const MAX_IMG_BYTES = 4 * 1024 * 1024;
 
 /** Categorías → arreglo de texto para la columna TEXT[] `categorias` (pg lo convierte solo) */
@@ -61,11 +71,124 @@ Lee lo que está impreso y responde SOLO con un objeto JSON, sin texto adicional
   "recorte_portada": {"x": n, "y": n, "w": n, "h": n} | null,
   "recorte_contraportada": {"x": n, "y": n, "w": n, "h": n} | null,
   "categorias": string[],          // 1 a 3 categorías de la lista dada; crea una nueva solo si ninguna sirve
-  "confianza": "alta" | "media" | "baja"
+  "confianza": "alta" | "media" | "baja",
+  "texto_visible": string           // TODO el texto legible de las fotos, en orden de lectura, sin omitir textos pequeños (ISBN, editorial, colección); máx. 2000 caracteres
 }
 
 Los recortes son el rectángulo del libro dentro de cada imagen, valores 0–1 desde la esquina superior izquierda.
 Reglas: no inventes datos que no se vean; usa null. Si la foto ya está recortada al libro, el recorte es {"x":0,"y":0,"w":1,"h":1}.`;
+
+// Copia de estanteria/src/scan/completar.js — mantener iguales
+function isbnValido(v) {
+  const s = String(v || '').replace(/[^\dXx]/g, '').toUpperCase();
+  if (s.length === 13 && /^\d{13}$/.test(s)) {
+    const sum = [...s].reduce((acc, d, i) => acc + Number(d) * (i % 2 ? 3 : 1), 0);
+    return sum % 10 === 0 ? s : null;
+  }
+  if (s.length === 10 && /^\d{9}[\dX]$/.test(s)) {
+    const sum = [...s].reduce((acc, d, i) => acc + (d === 'X' ? 10 : Number(d)) * (10 - i), 0);
+    return sum % 11 === 0 ? s : null;
+  }
+  return null;
+}
+function isbnsEnTexto(texto) {
+  const out = [];
+  const re = /(?:97[89][\s-]?)?(?:\d[\s-]?){9}[\dXx]/g;
+  for (const m of String(texto || '').matchAll(re)) {
+    const ok = isbnValido(m[0]);
+    if (ok && !out.includes(ok)) out.push(ok);
+  }
+  return out.sort((a, b) => b.length - a.length);
+}
+function paginasEnTexto(texto) {
+  const m = /(\d{2,4})\s*(?:p[áa]ginas|p[áa]gs?\.?|pp\.?|pages)\b/i.exec(String(texto || ''));
+  const n = m ? Number(m[1]) : NaN;
+  return n >= 10 && n <= 5000 ? n : null;
+}
+function completarDesdeTexto(r) {
+  const out = { ...(r || {}) };
+  const texto = typeof out.texto_visible === 'string' ? out.texto_visible.slice(0, 4000) : '';
+  out.texto_visible = texto || null;
+  out.isbn = isbnValido(out.isbn) || isbnsEnTexto(texto)[0] || null;
+  const pag = Number(out.paginas);
+  out.paginas = pag >= 10 && pag <= 5000 ? Math.round(pag) : paginasEnTexto(texto);
+  for (const k of ['titulo', 'subtitulo', 'autor', 'editorial', 'descripcion']) {
+    if (typeof out[k] === 'string') out[k] = out[k].replace(/\s+/g, ' ').trim() || null;
+  }
+  return out;
+}
+
+// ── Proveedores de lectura ─────────────────────────────────────────────
+class ErrorLectura extends Error {
+  constructor(msg, status, codigo) { super(msg); this.status = status; this.codigo = codigo; }
+}
+
+async function leerConAnthropic(prompt, imgs) {
+  const content = [
+    ...imgs.map((im) => ({ type: 'image', source: { type: 'base64', media_type: im.mime, data: im.base64 } })),
+    { type: 'text', text: prompt },
+  ];
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
+    body: JSON.stringify({ model: MODEL, max_tokens: 1500, messages: [{ role: 'user', content }] }),
+    signal: AbortSignal.timeout(45000),
+  });
+  if (!r.ok) {
+    console.error('anthropic:', r.status, (await r.text()).slice(0, 300));
+    throw new ErrorLectura('Claude no respondió', r.status, r.status === 429 ? 'rate_limited' : 'fallo');
+  }
+  const data = await r.json();
+  const text = (data.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
+  return { datos: parseJson(text), proveedor: 'anthropic', modelo: MODEL };
+}
+
+async function leerConOpenRouter(prompt, imgs) {
+  const content = [
+    { type: 'text', text: prompt },
+    ...imgs.map((im) => ({ type: 'image_url', image_url: { url: `data:${im.mime};base64,${im.base64}` } })),
+  ];
+  let ultimo = null;
+  for (const modelo of OPENROUTER_MODELS) {
+    try {
+      const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+          'x-title': 'Mi Biblioteca',
+        },
+        body: JSON.stringify({ model: modelo, temperature: 0, max_tokens: 1500, messages: [{ role: 'user', content }] }),
+        signal: AbortSignal.timeout(60000),
+      });
+      if (r.status === 429) {
+        // límite de modelos gratuitos (por minuto o por día): otro modelo :free no lo evita
+        console.error('openrouter 429:', (await r.text()).slice(0, 200));
+        throw new ErrorLectura('Se alcanzó el límite gratuito de OpenRouter', 429, 'rate_limited');
+      }
+      if (!r.ok) { ultimo = new ErrorLectura(`OpenRouter ${r.status}`, r.status, 'fallo'); console.error('openrouter:', modelo, r.status, (await r.text()).slice(0, 200)); continue; }
+      const data = await r.json();
+      if (data.error) { ultimo = new ErrorLectura(data.error.message || 'OpenRouter', 502, 'fallo'); console.error('openrouter:', modelo, data.error.message); continue; }
+      const text = data.choices?.[0]?.message?.content;
+      const plano = Array.isArray(text) ? text.map((c) => c.text || '').join('') : String(text || '');
+      if (!plano.trim()) { ultimo = new ErrorLectura('Respuesta vacía', 502, 'fallo'); continue; }
+      return { datos: parseJson(plano), proveedor: 'openrouter', modelo: data.model || modelo };
+    } catch (e) {
+      if (e.codigo === 'rate_limited') throw e;
+      ultimo = e; console.error('openrouter:', modelo, e.message);
+    }
+  }
+  throw ultimo || new ErrorLectura('OpenRouter no respondió', 502, 'fallo');
+}
+
+/** Orden de proveedores según IA_PROVEEDOR y las claves disponibles. */
+function proveedores() {
+  const hayOR = !!process.env.OPENROUTER_API_KEY, hayAN = !!process.env.ANTHROPIC_API_KEY;
+  const pref = (process.env.IA_PROVEEDOR || 'auto').toLowerCase();
+  if (pref === 'openrouter') return hayOR ? [leerConOpenRouter] : [];
+  if (pref === 'anthropic') return hayAN ? [leerConAnthropic] : [];
+  return [hayOR && leerConOpenRouter, hayAN && leerConAnthropic].filter(Boolean);
+}
 
 function parseDataUrl(dataUrl) {
   const m = /^data:(image\/(jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(dataUrl || ''));
@@ -104,47 +227,38 @@ module.exports = Object.assign(function estanteriaRoutes(app, pool, { auth, pued
     }
   });
 
-  // ── Leer datos de las fotos con Claude ───────────────────────────────
+  // ── Leer datos de las fotos (OpenRouter gratis y/o Claude) ──────────
   app.post('/api/libros/analizar', big, auth, soloEditores, async (req, res) => {
-    if (!process.env.ANTHROPIC_API_KEY) return res.status(503).json({ error: 'Falta ANTHROPIC_API_KEY' });
+    const lista = proveedores();
+    if (!lista.length) return res.status(503).json({ error: 'Falta OPENROUTER_API_KEY o ANTHROPIC_API_KEY', codigo: 'unavailable' });
     const front = parseDataUrl(req.body?.portada);
     const back = req.body?.contraportada ? parseDataUrl(req.body.contraportada) : null;
     if (!front) return res.status(400).json({ error: 'Falta la foto de la portada' });
 
-    const content = [
-      { type: 'image', source: { type: 'base64', media_type: front.mime, data: front.base64 } },
-      ...(back ? [{ type: 'image', source: { type: 'base64', media_type: back.mime, data: back.base64 } }] : []),
-      {
-        type: 'text',
-        text: SCAN_PROMPT +
-          `\n\nCategorías existentes: ${limpiarCategorias(req.body?.categorias).join(' | ') || '(ninguna)'}.` +
-          `\nEscribe "descripcion" en ${req.body?.idioma === 'en' ? 'inglés' : 'español'}.` +
-          `\nImágenes adjuntas: ${back ? 'portada y contraportada' : 'solo portada'}.`,
-      },
-    ];
+    const prompt = SCAN_PROMPT +
+      `\n\nCategorías existentes: ${limpiarCategorias(req.body?.categorias).join(' | ') || '(ninguna)'}.` +
+      `\nEscribe "descripcion" en ${req.body?.idioma === 'en' ? 'inglés' : 'español'}.` +
+      `\nImágenes adjuntas: ${back ? 'portada y contraportada' : 'solo portada'}.`;
+    const imgs = [front, back].filter(Boolean);
 
-    try {
-      const r = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': process.env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({ model: MODEL, max_tokens: 1024, messages: [{ role: 'user', content }] }),
-        signal: AbortSignal.timeout(45000),
-      });
-      if (!r.ok) {
-        console.error('anthropic:', r.status, (await r.text()).slice(0, 300));
-        return res.status(502).json({ error: 'El servicio de lectura no respondió' });
+    let ultimo = null;
+    for (const leer of lista) {
+      try {
+        const { datos, proveedor, modelo } = await leer(prompt, imgs);
+        return res.json({ ...completarDesdeTexto(datos), _proveedor: proveedor, _modelo: modelo });
+      } catch (e) {
+        ultimo = e;
+        console.error('analizar:', e.message);
       }
-      const data = await r.json();
-      const text = (data.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('');
-      res.json(parseJson(text));
-    } catch (e) {
-      console.error('analizar:', e.message);
-      res.status(502).json({ error: 'No se pudieron leer las fotos' });
     }
+    const status = ultimo?.codigo === 'rate_limited' ? 429 : 502;
+    res.status(status).json({ error: ultimo?.message || 'No se pudieron leer las fotos', codigo: ultimo?.codigo || 'fallo' });
+  });
+
+  // ── ¿Con qué se leen las fotos? (para el texto de la interfaz) ──────
+  app.get('/api/libros/analizar/estado', auth, (req, res) => {
+    const lista = proveedores().map((f) => (f === leerConOpenRouter ? 'openrouter' : 'anthropic'));
+    res.json({ disponible: lista.length > 0, proveedores: lista, modelos: lista[0] === 'openrouter' ? OPENROUTER_MODELS : [MODEL] });
   });
 
   // ── Crear libro con todos los campos de la estantería ────────────────
@@ -184,4 +298,4 @@ module.exports = Object.assign(function estanteriaRoutes(app, pool, { auth, pued
       res.status(500).json({ error: 'No se pudo guardar el libro' });
     }
   });
-}, { limpiarNotas, limpiarCategorias });
+}, { limpiarNotas, limpiarCategorias, completarDesdeTexto, isbnValido });

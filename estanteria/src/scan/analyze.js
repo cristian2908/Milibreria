@@ -1,6 +1,6 @@
 // Lee título, autor, descripción y recorte a partir de las fotos.
 // 1) Dentro de un artifact de Claude: capacidad `sample` con imágenes.
-// 2) En tu servidor: POST /api/libros/analizar (la API llama a Anthropic con tu clave).
+// 2) En tu servidor: POST /api/libros/analizar (la API usa OpenRouter gratis o Claude).
 import { buildScanPrompt, parseScan } from './prompt.js';
 
 const API = import.meta.env.VITE_API_URL || '/api';
@@ -27,6 +27,17 @@ export async function scanAvailable(source) {
   return !!(await getSample());
 }
 
+/** Disponibilidad y proveedor: { available, provider: 'claude' | 'openrouter' | null } */
+export async function scanInfo(source, token) {
+  if (source !== 'api') return { available: !!(await getSample()), provider: 'claude' };
+  try {
+    const r = await fetch(`${API}/libros/analizar/estado`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    if (!r.ok) return { available: true, provider: null }; // API sin la ruta de estado: se intenta igual
+    const j = await r.json();
+    return { available: !!j.disponible, provider: j.proveedores?.[0] === 'openrouter' ? 'openrouter' : 'claude' };
+  } catch { return { available: true, provider: null }; }
+}
+
 /**
  * front/back: { blob, dataUrl } de la foto completa (ya reducida).
  * Devuelve el objeto del prompt (titulo, autor, descripcion, recortes...).
@@ -48,6 +59,9 @@ export async function analyzeCovers({ front, back }, { source, token, signal, ca
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify({ portada: front.dataUrl, contraportada: back?.dataUrl || null, categorias: categories, idioma: lang }),
   });
-  if (!r.ok) throw new Error(`API ${r.status}`);
+  if (!r.ok) {
+    const code = r.status === 429 ? 'rate_limited' : r.status === 503 ? 'unavailable' : 'failed';
+    throw Object.assign(new Error(`API ${r.status}`), { code });
+  }
   return parseScan(await r.json());
 }

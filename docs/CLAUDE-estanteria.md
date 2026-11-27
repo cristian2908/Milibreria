@@ -60,3 +60,10 @@ FloatChips, FloatSection, FloatFoot; un panel a la vez, Esc/fuera para cerrar) y
 (contenido). Tokens propios `--fl-*`: la barra y los paneles son oscuros en ambos temas.
 
 Pendiente fase 2: arrastrar para ordenar, recorte manual, completar páginas por ISBN, varias repisas.
+
+
+Agregar con fotos: `src/scan/cvcrop.js` (OpenCV.js: detectBookQuad / detectBook con consenso a 3 escalas /
+warpQuad; carga perezosa con loadOpenCVFrom(OPENCV_URLS)), `src/scan/completar.js` (ISBN con dígito de control,
+páginas desde `texto_visible`; copia CJS en api/estanteria-routes.js). La API lee con OpenRouter (modelos :free) o
+Claude según `IA_PROVEEDOR`; `GET /api/libros/analizar/estado` informa el proveedor. El prompt vive en
+`src/scan/prompt.js` y su copia en la API: mantener iguales.

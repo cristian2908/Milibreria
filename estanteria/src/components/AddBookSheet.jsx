@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { FORMATS, READ_STATUS } from '../bookshelf/status.js';
-import { fileToImage, renderImage, normalizeBox } from '../scan/image.js';
-import { analyzeCovers, scanAvailable } from '../scan/analyze.js';
+import { fileToImage, renderImage, normalizeBox, imageDataOf } from '../scan/image.js';
+import { loadOpenCVFrom, detectBook } from '../scan/cvcrop.js';
+import { analyzeCovers, scanInfo } from '../scan/analyze.js';
 import CategoryPicker from './CategoryPicker.jsx';
 import { cleanCategory } from '../search.js';
-import { PUBLIC_URL, IN_CLAUDE } from '../config.js';
+import { PUBLIC_URL, IN_CLAUDE, OPENCV_URLS } from '../config.js';
 import { useI18n } from '../i18n.jsx';
 
 const EMPTY = {
@@ -21,19 +22,24 @@ export default function AddBookSheet({ open, onClose, onSave, source, token, cat
   const { t, lang } = useI18n();
   const [mode, setMode] = useState('fotos');
   const [form, setForm] = useState(EMPTY);
-  const [front, setFront] = useState(null); // { img, box }
+  const [front, setFront] = useState(null); // { img, box, quad, crop: 'buscando'|'listo'|'nada'|'sin-opencv' }
   const [back, setBack] = useState(null);
   const [useCrop, setUseCrop] = useState(true);
   const [preview, setPreview] = useState({ front: null, back: null }); // render final
   const [scan, setScan] = useState({ state: 'idle', msg: '' });
   const [canScan, setCanScan] = useState(null);
+  const [provider, setProvider] = useState(null);
+  const [readText, setReadText] = useState('');
   const [saving, setSaving] = useState(false);
   const [suggested, setSuggested] = useState([]);
   const [err, setErr] = useState('');
   const abortRef = useRef(null);
   const titleRef = useRef(null);
 
-  useEffect(() => { scanAvailable(source).then(setCanScan); }, [source]);
+  useEffect(() => { scanInfo(source, token).then((i) => { setCanScan(i.available); setProvider(i.provider); }); }, [source, token]);
+
+  // OpenCV pesa ~4 MB comprimido: se empieza a bajar al abrir la hoja en modo fotos
+  useEffect(() => { if (open && mode === 'fotos') loadOpenCVFrom(OPENCV_URLS).catch(() => {}); }, [open, mode]);
 
   useEffect(() => {
     if (!open) return;
@@ -48,8 +54,8 @@ export default function AddBookSheet({ open, onClose, onSave, source, token, cat
   useEffect(() => {
     let alive = true;
     (async () => {
-      const f = front ? await renderImage(front.img, { box: useCrop ? front.box : null, maxSide: 640, quality: 0.8 }) : null;
-      const b = back ? await renderImage(back.img, { box: useCrop ? back.box : null, maxSide: 640, quality: 0.78 }) : null;
+      const f = front ? await renderImage(front.img, cropOf(front, useCrop, { maxSide: 640, quality: 0.8 })) : null;
+      const b = back ? await renderImage(back.img, cropOf(back, useCrop, { maxSide: 640, quality: 0.78 })) : null;
       if (alive) setPreview({ front: f, back: b });
     })();
     return () => { alive = false; };
@@ -58,7 +64,7 @@ export default function AddBookSheet({ open, onClose, onSave, source, token, cat
   const reset = () => {
     abortRef.current?.abort();
     setForm(EMPTY); setFront(null); setBack(null); setUseCrop(true);
-    setScan({ state: 'idle', msg: '' }); setErr(''); setSaving(false); setSuggested([]);
+    setScan({ state: 'idle', msg: '' }); setErr(''); setSaving(false); setSuggested([]); setReadText('');
   };
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target ? e.target.value : e }));
@@ -76,11 +82,23 @@ export default function AddBookSheet({ open, onClose, onSave, source, token, cat
     if (file.type && !file.type.startsWith('image/')) { setPhotoErr('sheet.notImage'); return; }
     try {
       const img = await fileToImage(file);
-      (which === 'front' ? setFront : setBack)({ img, box: null });
+      const setter = which === 'front' ? setFront : setBack;
+      setter({ img, box: null, quad: null, crop: 'buscando' });
       if (scan.state === 'done') setScan({ state: 'idle', msg: '' });
+      autoCrop(img).then((r) => setter((p) => (p && p.img === img ? { ...p, quad: r.quad, crop: r.crop } : p)));
     } catch {
       setPhotoErr('sheet.cantOpen');
     }
+  };
+
+  // Busca el libro en la foto con OpenCV (no bloquea: si falla, se usa la foto completa)
+  const autoCrop = async (img) => {
+    let cv;
+    try { cv = await loadOpenCVFrom(OPENCV_URLS); } catch { return { quad: null, crop: 'sin-opencv' }; }
+    try {
+      const r = await detectBook(cv, imageDataOf(img, 1200));
+      return r.confident ? { quad: r.quad, crop: 'listo' } : { quad: null, crop: 'nada' };
+    } catch { return { quad: null, crop: 'nada' }; }
   };
 
   const pick = (which) => (e) => {
@@ -110,13 +128,16 @@ export default function AddBookSheet({ open, onClose, onSave, source, token, cat
     setScan({ state: 'reading', msg: back ? 'sheet.readingBoth' : 'sheet.readingFront' });
     setErr('');
     try {
-      const fFull = await renderImage(front.img, { maxSide: 1400, quality: 0.82 });
-      const bFull = back ? await renderImage(back.img, { maxSide: 1400, quality: 0.82 }) : null;
+      const opts = { maxSide: 1400, quality: 0.82 };
+      const fFull = await renderImage(front.img, useCrop && front.quad ? { ...opts, quad: front.quad } : opts);
+      const bFull = back ? await renderImage(back.img, useCrop && back.quad ? { ...opts, quad: back.quad } : opts) : null;
       const r = await analyzeCovers({ front: fFull, back: bFull }, { source, token, signal: ctrl.signal, categories, lang });
       const sugg = (Array.isArray(r.categorias) ? r.categorias : []).map(cleanCategory).filter(Boolean).slice(0, 3);
       setSuggested(sugg);
-      setFront((p) => p && { ...p, box: normalizeBox(r.recorte_portada) });
-      setBack((p) => p && { ...p, box: normalizeBox(r.recorte_contraportada) });
+      setReadText(r.texto_visible || '');
+      // la caja de la IA solo se usa si OpenCV no encontró el libro
+      setFront((p) => p && (p.quad ? p : { ...p, box: normalizeBox(r.recorte_portada) }));
+      setBack((p) => p && (p.quad ? p : { ...p, box: normalizeBox(r.recorte_contraportada) }));
       setForm((f) => ({
         ...f,
         title: r.titulo || f.title,
@@ -175,7 +196,10 @@ export default function AddBookSheet({ open, onClose, onSave, source, token, cat
   if (!open) return null;
 
   const photoMode = mode === 'fotos';
-  const hasBoxes = !!(front?.box || back?.box);
+  const hasQuads = !!(front?.quad || back?.quad);
+  const hasBoxes = hasQuads || !!(front?.box || back?.box);
+  const finding = front?.crop === 'buscando' || back?.crop === 'buscando';
+  const notFound = [front, back].filter((p) => p?.crop === 'nada').length;
 
   return (
     <div className="sheet-backdrop" onClick={onClose}>
@@ -212,8 +236,14 @@ export default function AddBookSheet({ open, onClose, onSave, source, token, cat
           {hasBoxes ? (
             <label className="toggle">
               <input type="checkbox" checked={useCrop} onChange={(e) => setUseCrop(e.target.checked)} />
-              <span>{t('sheet.crop')}</span>
+              <span>{t(hasQuads ? 'sheet.cropAuto' : 'sheet.crop')}</span>
             </label>
+          ) : null}
+          {photoMode && (finding || notFound) ? (
+            <p className="crop-msg" aria-live="polite">
+              {finding ? <span className="spinner" aria-hidden="true" /> : null}
+              {t(finding ? 'sheet.cropFinding' : 'sheet.cropNone')}
+            </p>
           ) : null}
 
           {photoMode ? (
@@ -230,8 +260,14 @@ export default function AddBookSheet({ open, onClose, onSave, source, token, cat
               </button>
               <p className={`scan-msg is-${scan.state}`} aria-live="polite">
                 {t(canScan === false ? 'sheet.readNoScan'
-                  : scan.msg || (!front ? 'sheet.readFirst' : 'sheet.readUsesClaude'))}
+                  : scan.msg || (!front ? 'sheet.readFirst' : provider === 'openrouter' ? 'sheet.readUsesOpenRouter' : 'sheet.readUsesClaude'))}
               </p>
+              {readText ? (
+                <details className="read-text">
+                  <summary>{t('sheet.readText')}</summary>
+                  <p>{readText}</p>
+                </details>
+              ) : null}
             </div>
           ) : null}
 
@@ -340,4 +376,11 @@ function Seg({ label, value, options, onChange }) {
       </div>
     </div>
   );
+}
+
+/** Opciones de recorte para renderImage: primero el cuadrilátero de OpenCV, si no la caja de la IA. */
+function cropOf(photo, useCrop, base) {
+  if (!useCrop) return base;
+  if (photo.quad) return { ...base, quad: photo.quad };
+  return { ...base, box: photo.box };
 }

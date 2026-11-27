@@ -161,10 +161,17 @@ contraportada al interior gira primero a la portada y después la abre.
 Botón **Agregar** en el encabezado → hoja con dos pestañas:
 
 - **Con fotos:** foto de la portada (obligatoria) y de la contraportada (opcional),
-  con la cámara del celular. "Leer datos de las fotos" usa Claude para llenar título,
-  autor, editorial, ISBN, páginas (si están impresas) y un resumen de la
-  contraportada. También detecta el borde del libro y recorta la foto, y ese
-  recorte se puede desactivar. Todo queda editable antes de guardar.
+  con la cámara del celular.
+  1. **Recorte automático con OpenCV** (en el navegador, sin enviar nada): al elegir
+     cada foto se busca el libro, se recorta y se **endereza la perspectiva**. Si no hay
+     bordes claros (por ejemplo, una foto ya recortada), se deja la foto completa. El
+     recorte se puede desactivar.
+  2. **«Leer datos de las fotos»**: un modelo de visión lee las fotos ya recortadas y
+     llena título, autor, editorial, ISBN, páginas y un resumen de la contraportada.
+     También devuelve todo el texto que vio («Texto leído de las fotos»). Con ese texto
+     se valida el **ISBN por su dígito de control** y se completan las páginas si
+     estaban impresas.
+  Todo queda editable antes de guardar.
 - **Manual:** formulario con los mismos campos; portada y contraportada opcionales
   desde la galería.
 
@@ -174,9 +181,39 @@ páginas definen el grosor. Si hay foto de contraportada, aparece de fondo en la
 trasera del libro, detrás de tu nota. Los libros agregados se pueden eliminar desde
 el panel.
 
-- Vista previa (artifact): la lectura usa Claude dentro de la página y los libros
-  se guardan en el navegador (`localStorage`, unos 40 KB por foto).
-- Servidor: `api/estanteria-routes.js` + migración 004 (ver `api/CAMBIOS-index.md`).
+### Recorte automático (OpenCV.js)
+
+`estanteria/src/scan/cvcrop.js`. OpenCV.js 5 (`@techstark/opencv-js`, 13 MB; 3,8 MB
+comprimido) se descarga solo al abrir «Agregar con fotos». En el servidor, `npm run build`
+lo copia a `dist/vendor/opencv.js` y se sirve desde tu dominio; en la vista previa de
+Claude viene de jsDelivr.
+
+1. Líneas rectas (Canny en Lab + Hough), puntuadas por qué tan «de borde» son, más líneas
+   ajustadas con RANSAC a regiones de color uniforme (flood fill).
+2. Cada par de verticales × par de horizontales forma un candidato; gana el que separa
+   mejor «libro» de «fondo» (color adentro frente a afuera en los 4 lados), grande,
+   con ángulos rectos y lados opuestos paralelos.
+3. Ajuste fino de cada lado (±12 px) y consenso a 3 escalas (mediana de cada esquina).
+4. Solo se aplica con confianza alta; si no, se usa la foto completa.
+
+Probado con fotos reales tomadas a mano frente a una biblioteca: 1–1,5 s en un
+computador; en un celular puede tardar unos segundos más (no bloquea la hoja).
+
+### Lectura de las fotos: OpenRouter gratis o Claude
+
+- **Vista previa (artifact de Claude):** lee Claude dentro de la página.
+- **Servidor:** `POST /api/libros/analizar` usa, según el `.env`:
+  - `OPENROUTER_API_KEY` → modelos **gratuitos** de visión de OpenRouter (idea tomada de
+    [ceodaniyal/free-llm-image-to-text](https://github.com/ceodaniyal/free-llm-image-to-text)).
+    Por defecto `amazon/nova-2-lite-v1:free` y, si no está disponible,
+    `openrouter/free` (elige al azar un modelo gratuito que acepte imágenes). Límites de
+    OpenRouter: 20 por minuto y 50 por día; 1000 por día si alguna vez compraste al menos
+    10 USD en créditos. Las fotos van a un proveedor externo y algunos modelos gratuitos
+    pueden registrar las entradas.
+  - `ANTHROPIC_API_KEY` → Claude (de pago).
+  - Con las dos claves (`IA_PROVEEDOR=auto`), se intenta OpenRouter y, si falla o llegas
+    al límite, Claude. `IA_PROVEEDOR=openrouter` o `anthropic` fuerza uno.
+  - `GET /api/libros/analizar/estado` dice qué proveedor está activo (la hoja lo muestra).
 
 ## Colección: físico/virtual, lectura y nota
 

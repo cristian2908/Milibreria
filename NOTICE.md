@@ -1,5 +1,19 @@
 # Atribución
 
+## Dependencias y referencias del agregado con fotos
+
+- **OpenCV.js** (recorte automático) — paquete `@techstark/opencv-js` 5.0.0, build de
+  OpenCV para la web. OpenCV se distribuye con licencia **Apache 2.0**
+  (https://github.com/opencv/opencv/blob/4.x/LICENSE). Se usa sin modificar; en el
+  servidor se sirve como `estanteria/dist/vendor/opencv.js`.
+- **ceodaniyal/free-llm-image-to-text** — https://github.com/ceodaniyal/free-llm-image-to-text
+  Script de Python que hace OCR con modelos de visión gratuitos de OpenRouter. Se tomó la
+  idea y el modelo por defecto (`amazon/nova-2-lite-v1:free`); la integración en
+  `api/estanteria-routes.js` se escribió en Node desde cero (el repositorio indica MIT en su
+  README, pero no incluye archivo de licencia).
+
+## Estantería 3D
+
 La estantería 3D se reimplementó desde cero en React. Se usó como referencia de
 comportamiento (no como base de código) el proyecto:
 
