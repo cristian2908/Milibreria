@@ -3,7 +3,7 @@
 ## 0. Agregar libros (manual y con fotos) — `estanteria-routes.js`
 
 Trae tres rutas listas: `POST /api/portadas` (guarda la foto), `POST /api/libros/analizar`
-(lee portada y contraportada con Claude) y `POST /api/libros` (crea el libro con todos los
+(lee portada y contraportada con un modelo gratuito de OpenRouter o con Claude), `GET /api/libros/analizar/estado` y `POST /api/libros` (crea el libro con todos los
 campos nuevos). Móntalas **antes** de `app.use(express.json())`, porque las fotos pesan
 más que el límite por defecto (100 KB) del parser global:
 
@@ -21,7 +21,9 @@ estado, el ISBN y que las imágenes vengan de `/portadas/`.
 `.env`:
 
 ```
-ANTHROPIC_API_KEY=sk-ant-...
+OPENROUTER_API_KEY=sk-or-...      # gratis (50 lecturas/día); basta con esta o con la de Anthropic
+IA_PROVEEDOR=auto                 # auto | openrouter | anthropic
+ANTHROPIC_API_KEY=sk-ant-...      # opcional, de pago (respaldo)
 ANTHROPIC_MODEL=claude-sonnet-5-5
 PORTADAS_DIR=/app/portadas
 PORTADAS_URL=/portadas
@@ -46,8 +48,8 @@ client_max_body_size 12m;
 
 El rol `lector` recibe 403 en las tres rutas.
 
-No tengo tu `index.js` actual (el repo de GitHub sigue vacío), así que estos son los
-cambios a aplicar a mano o pidiéndoselos a Claude Code en el servidor.
+El repositorio todavía no tiene tu `index.js`, así que estos cambios se aplican a mano o
+con Claude Code en el servidor siguiendo `DESPLIEGUE.md`.
 
 ## 1. Crear las columnas al arrancar
 
