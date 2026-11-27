@@ -67,7 +67,7 @@ Lee lo que está impreso y responde SOLO con un objeto JSON, sin texto adicional
   "isbn": string | null,            // solo dígitos y X, si se ve (ISBN-13 preferido)
   "paginas": number | null,         // solo si está impreso; no lo inventes
   "idioma": string | null,
-  "descripcion": string,            // resumen (máx. 380 caracteres) del texto de la contraportada, en el idioma indicado abajo
+  "descripcion": string | null,     // COPIA LITERAL del texto de presentación de la contraportada (el párrafo o los párrafos principales), tal como está impreso: sin resumir, reescribir, traducir ni agregar nada; si pasa de 700 caracteres, corta al final de una frase; si no hay contraportada o no tiene texto legible, null
   "recorte_portada": {"x": n, "y": n, "w": n, "h": n} | null,
   "recorte_contraportada": {"x": n, "y": n, "w": n, "h": n} | null,
   "categorias": string[],          // 1 a 3 categorías de la lista dada; crea una nueva solo si ninguna sirve
@@ -76,9 +76,17 @@ Lee lo que está impreso y responde SOLO con un objeto JSON, sin texto adicional
 }
 
 Los recortes son el rectángulo del libro dentro de cada imagen, valores 0–1 desde la esquina superior izquierda.
-Reglas: no inventes datos que no se vean; usa null. Si la foto ya está recortada al libro, el recorte es {"x":0,"y":0,"w":1,"h":1}.`;
+Reglas: no inventes datos que no se vean ni completes con lo que sepas del libro; usa null. Si la foto ya está recortada al libro, el recorte es {"x":0,"y":0,"w":1,"h":1}.`;
 
 // Copia de estanteria/src/scan/completar.js — mantener iguales
+const foldTxt = (x) => String(x ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+function respaldadoPorTexto(desc, texto) {
+  const palabras = (x) => foldTxt(x).match(/[a-zñ0-9]{4,}/g) || [];
+  const d = palabras(desc);
+  if (!d.length) return false;
+  const t = new Set(palabras(texto));
+  return d.filter((w) => t.has(w)).length / d.length >= 0.85;
+}
 function isbnValido(v) {
   const s = String(v || '').replace(/[^\dXx]/g, '').toUpperCase();
   if (s.length === 13 && /^\d{13}$/.test(s)) {
@@ -112,9 +120,14 @@ function completarDesdeTexto(r) {
   out.isbn = isbnValido(out.isbn) || isbnsEnTexto(texto)[0] || null;
   const pag = Number(out.paginas);
   out.paginas = pag >= 10 && pag <= 5000 ? Math.round(pag) : paginasEnTexto(texto);
-  for (const k of ['titulo', 'subtitulo', 'autor', 'editorial', 'descripcion']) {
+  for (const k of ['titulo', 'subtitulo', 'autor', 'editorial']) {
     if (typeof out[k] === 'string') out[k] = out[k].replace(/\s+/g, ' ').trim() || null;
   }
+  // el resumen solo se acepta si está en el texto de la contraportada (nunca inventado ni redactado)
+  if (typeof out.descripcion === 'string' && out.descripcion.trim()) {
+    out.descripcion = out.descripcion.replace(/[ \t]+/g, ' ').trim();
+    if (!respaldadoPorTexto(out.descripcion, texto)) { out.descripcion = null; out._descripcion_descartada = true; }
+  } else out.descripcion = null;
   return out;
 }
 
@@ -237,7 +250,6 @@ module.exports = Object.assign(function estanteriaRoutes(app, pool, { auth, pued
 
     const prompt = SCAN_PROMPT +
       `\n\nCategorías existentes: ${limpiarCategorias(req.body?.categorias).join(' | ') || '(ninguna)'}.` +
-      `\nEscribe "descripcion" en ${req.body?.idioma === 'en' ? 'inglés' : 'español'}.` +
       `\nImágenes adjuntas: ${back ? 'portada y contraportada' : 'solo portada'}.`;
     const imgs = [front, back].filter(Boolean);
 
@@ -298,4 +310,4 @@ module.exports = Object.assign(function estanteriaRoutes(app, pool, { auth, pued
       res.status(500).json({ error: 'No se pudo guardar el libro' });
     }
   });
-}, { limpiarNotas, limpiarCategorias, completarDesdeTexto, isbnValido });
+}, { limpiarNotas, limpiarCategorias, completarDesdeTexto, isbnValido, respaldadoPorTexto });

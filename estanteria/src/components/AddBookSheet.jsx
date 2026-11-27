@@ -182,7 +182,9 @@ export default function AddBookSheet({ open, onClose, onSave, source, token, cat
         categories: f.categories.length ? f.categories : sugg,
       }));
       const low = r.confianza === 'baja';
-      setScan({ state: 'done', via: local ? 'local' : 'ia', msg: local ? (low ? 'sheet.localLow' : 'sheet.localDone') : low ? 'sheet.readLow' : 'sheet.readDone' });
+      const msg = r._descripcion_descartada ? 'sheet.descDiscarded'
+        : local ? (low ? 'sheet.localLow' : 'sheet.localDone') : low ? 'sheet.readLow' : 'sheet.readDone';
+      setScan({ state: 'done', via: local ? 'local' : 'ia', msg });
       setTimeout(() => titleRef.current?.focus({ preventScroll: true }), 50);
     }
   };

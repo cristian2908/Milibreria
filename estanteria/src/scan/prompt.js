@@ -14,7 +14,7 @@ Lee lo que está impreso y responde SOLO con un objeto JSON, sin texto adicional
   "isbn": string | null,            // solo dígitos y X, si se ve (ISBN-13 preferido)
   "paginas": number | null,         // solo si está impreso; no lo inventes
   "idioma": string | null,          // "es", "en", ...
-  "descripcion": string,            // resumen (máx. 380 caracteres) del texto de la contraportada, en el idioma indicado abajo; si no hay contraportada, una línea neutra a partir de la portada
+  "descripcion": string | null,     // COPIA LITERAL del texto de presentación de la contraportada (el párrafo o los párrafos principales), tal como está impreso: sin resumir, reescribir, traducir ni agregar nada; si pasa de 700 caracteres, corta al final de una frase; si no hay contraportada o no tiene texto legible, null
   "recorte_portada": {"x": n, "y": n, "w": n, "h": n} | null,        // rectángulo del libro dentro de la imagen 1, valores 0–1 desde la esquina superior izquierda
   "recorte_contraportada": {"x": n, "y": n, "w": n, "h": n} | null,  // igual para la imagen 2
   "categorias": string[],          // 1 a 3 categorías de la lista dada; crea una nueva solo si ninguna sirve
@@ -22,12 +22,11 @@ Lee lo que está impreso y responde SOLO con un objeto JSON, sin texto adicional
   "texto_visible": string           // TODO el texto legible de las fotos, en orden de lectura, sin omitir textos pequeños (ISBN, editorial, colección); máx. 2000 caracteres
 }
 
-Reglas: no inventes datos que no se vean; usa null. Si la foto ya está recortada al libro, el recorte es {"x":0,"y":0,"w":1,"h":1}.`;
+Reglas: no inventes datos que no se vean ni completes con lo que sepas del libro; usa null. Si la foto ya está recortada al libro, el recorte es {"x":0,"y":0,"w":1,"h":1}.`;
 
 /** Agrega al prompt las categorías que ya existen en la biblioteca */
 export function buildScanPrompt(categories = [], hasBack = false, lang = 'es') {
   return SCAN_PROMPT +
-    `\n\nEscribe "descripcion" en ${lang === 'en' ? 'inglés' : 'español'}.` +
     `\n\nCategorías existentes: ${categories.length ? categories.join(' | ') : '(ninguna)'}.` +
     `\nImágenes adjuntas: ${hasBack ? 'portada y contraportada' : 'solo portada'}.`;
 }

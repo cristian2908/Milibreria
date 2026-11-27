@@ -1,6 +1,20 @@
 // Completa y valida los datos que devuelve el modelo usando el texto que leyó de las fotos.
 // Copia en CommonJS dentro de api/estanteria-routes.js (mantener iguales).
 
+const fold = (s) => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+/**
+ * ¿El resumen está copiado del texto leído? Al menos el 85 % de sus palabras (4+ letras)
+ * deben aparecer en el texto de las fotos. Sirve para descartar resúmenes redactados o inventados.
+ */
+export function respaldadoPorTexto(desc, texto) {
+  const palabras = (x) => fold(x).match(/[a-zñ0-9]{4,}/g) || [];
+  const d = palabras(desc);
+  if (!d.length) return false;
+  const t = new Set(palabras(texto));
+  return d.filter((w) => t.has(w)).length / d.length >= 0.85;
+}
+
 /** Valida un ISBN-10 o ISBN-13 (dígito de control). Devuelve el ISBN limpio o null. */
 export function isbnValido(v) {
   const s = String(v || '').replace(/[^\dXx]/g, '').toUpperCase();
@@ -44,8 +58,13 @@ export function completarDesdeTexto(r) {
   out.isbn = isbnValido(out.isbn) || isbnsEnTexto(texto)[0] || null;
   const pag = Number(out.paginas);
   out.paginas = pag >= 10 && pag <= 5000 ? Math.round(pag) : paginasEnTexto(texto);
-  for (const k of ['titulo', 'subtitulo', 'autor', 'editorial', 'descripcion']) {
+  for (const k of ['titulo', 'subtitulo', 'autor', 'editorial']) {
     if (typeof out[k] === 'string') out[k] = out[k].replace(/\s+/g, ' ').trim() || null;
   }
+  // el resumen solo se acepta si está en el texto de la contraportada (nunca inventado ni redactado)
+  if (typeof out.descripcion === 'string' && out.descripcion.trim()) {
+    out.descripcion = out.descripcion.replace(/[ \t]+/g, ' ').trim();
+    if (!respaldadoPorTexto(out.descripcion, texto)) { out.descripcion = null; out._descripcion_descartada = true; }
+  } else out.descripcion = null;
   return out;
 }
